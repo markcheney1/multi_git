@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "multi-git-sync",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Sync multiple Git repositories into folders inside an Obsidian vault.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

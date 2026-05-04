@@ -1,8 +1,10 @@
-/*
+.multi-git-repository {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	margin: 16px 0;
+	padding: 12px 16px;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
-
-If your plugin does not need CSS, delete this file.
-
-*/
+.multi-git-empty {
+	color: var(--text-muted);
+}
