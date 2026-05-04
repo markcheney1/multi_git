@@ -43,6 +43,20 @@ Vault 目录：Git/notes
 - SSH 地址需要你提前在本机配置好 SSH key 和远程仓库权限。
 - 不建议把访问令牌直接写在 HTTPS URL 中；如果必须使用，请注意 Obsidian 插件配置会保存在本地。
 
+## 通过 BRAT 安装
+
+1. 在 Obsidian 中安装并启用 **BRAT**。
+2. 打开 **Settings → Community plugins → BRAT**。
+3. 选择 **Add Beta plugin**。
+4. 输入仓库地址：
+
+```text
+https://github.com/markcheney1/multi_git
+```
+
+5. BRAT 会从 GitHub Releases 下载 `main.js`、`manifest.json` 和 `styles.css`。
+6. 回到 **Settings → Community plugins**，启用 **Multi Git Sync**。
+
 ## 开发
 
 安装依赖：
@@ -78,3 +92,21 @@ npm run build
 - `styles.css`
 
 然后在 Obsidian 中重新加载并启用插件。
+
+## 发布
+
+GitHub Release 的 tag 必须和 `manifest.json` 中的 `version` 完全一致，不要加 `v` 前缀。
+
+发布 `1.0.0`：
+
+```bash
+git tag 1.0.0
+git push origin master
+git push origin 1.0.0
+```
+
+推送 tag 后，GitHub Actions 会自动构建并创建 release，上传以下 BRAT 需要的资产：
+
+- `main.js`
+- `manifest.json`
+- `styles.css`
