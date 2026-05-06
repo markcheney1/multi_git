@@ -8,3 +8,13 @@
 .multi-git-empty {
 	color: var(--text-muted);
 }
+
+.multi-git-conflict-modal p {
+	color: var(--text-muted);
+	margin-top: 0;
+}
+
+.multi-git-conflict-list {
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 12px;
+}

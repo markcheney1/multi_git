@@ -1,7 +1,14 @@
 import { App, PluginSettingTab, Setting, normalizePath } from "obsidian";
 import type MultiGitPlugin from "./main";
+import { normalizeRemoteUrl } from "./remote-url";
 
 export type SyncStatus = "never" | "success" | "error";
+
+export interface GitConflictState {
+	branch: string;
+	files: string[];
+	startedAt: string;
+}
 
 export interface GitRepositoryConfig {
 	id: string;
@@ -15,6 +22,10 @@ export interface GitRepositoryConfig {
 	lastSyncedAt?: string;
 	lastSyncStatus: SyncStatus;
 	lastSyncMessage?: string;
+	lastUploadedAt?: string;
+	lastUploadStatus: SyncStatus;
+	lastUploadMessage?: string;
+	pendingConflict?: GitConflictState;
 }
 
 export interface MultiGitSettings {
@@ -50,14 +61,14 @@ export class MultiGitSettingTab extends PluginSettingTab {
 				.setButtonText("添加")
 				.setCta()
 				.onClick(async () => {
-					this.plugin.settings.repositories.push(createRepositoryConfig());
+					this.plugin.settings.repositories.unshift(createRepositoryConfig());
 					await this.plugin.saveSettingsAndReschedule();
 					this.display();
 				}));
 
 		if (this.plugin.settings.repositories.length === 0) {
 			containerEl.createEl("p", {
-				text: "还没有仓库配置。添加仓库后，可以手动同步或启用定时同步。",
+				text: "还没有仓库配置。添加仓库后，可以手动拉取、上传或启用定时拉取。",
 				cls: "multi-git-empty",
 			});
 			return;
@@ -71,7 +82,7 @@ export class MultiGitSettingTab extends PluginSettingTab {
 
 			new Setting(sectionEl)
 				.setName("启用")
-				.setDesc("停用后不会手动或定时同步这个仓库。")
+				.setDesc("停用后不会手动拉取、上传或定时拉取这个仓库。")
 				.addToggle((toggle) => toggle
 					.setValue(repository.enabled)
 					.onChange(async (value) => {
@@ -93,12 +104,12 @@ export class MultiGitSettingTab extends PluginSettingTab {
 
 			new Setting(sectionEl)
 				.setName("Git 链接")
-				.setDesc("支持 HTTPS 或 SSH 地址。")
+				.setDesc("支持带端口的远程地址。")
 				.addText((text) => text
-					.setPlaceholder("https://github.com/user/repo.git")
+					.setPlaceholder("ssh://git@example.com:2222/user/repo.git")
 					.setValue(repository.remoteUrl)
 					.onChange(async (value) => {
-						repository.remoteUrl = value.trim();
+						repository.remoteUrl = normalizeRemoteUrl(value);
 						await this.plugin.saveSettings();
 					}));
 
@@ -125,7 +136,7 @@ export class MultiGitSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(sectionEl)
-				.setName("定时同步")
+				.setName("定时拉取")
 				.setDesc("启用后按设定间隔执行 Git pull。")
 				.addToggle((toggle) => toggle
 					.setValue(repository.autoSync)
@@ -135,7 +146,7 @@ export class MultiGitSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(sectionEl)
-				.setName("同步间隔")
+				.setName("拉取间隔")
 				.setDesc("单位：分钟，最小 1 分钟。")
 				.addText((text) => text
 					.setPlaceholder(String(DEFAULT_INTERVAL_MINUTES))
@@ -145,15 +156,47 @@ export class MultiGitSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettingsAndReschedule();
 					}));
 
+			if (repository.pendingConflict) {
+				new Setting(sectionEl)
+					.setName("上传暂停")
+					.setDesc(formatConflictStatus(repository))
+					.addButton((button) => button
+						.setButtonText("查看冲突")
+						.onClick(async () => {
+							await this.plugin.showConflictResolution(repository.id);
+							this.display();
+						}))
+					.addButton((button) => button
+						.setButtonText("继续上传")
+						.setCta()
+						.onClick(async () => {
+							await this.plugin.continueUploadRepository(repository.id, true);
+							this.display();
+						}));
+			}
+
 			new Setting(sectionEl)
-				.setName("最近状态")
-				.setDesc(formatStatus(repository))
+				.setName("最近拉取")
+				.setDesc(formatStatus({ status: repository.lastSyncStatus, at: repository.lastSyncedAt, message: repository.lastSyncMessage }, "尚未拉取"))
 				.addButton((button) => button
-					.setButtonText("立即同步")
+					.setButtonText("拉取最新内容")
 					.onClick(async () => {
 						await this.plugin.syncRepository(repository.id, true);
 						this.display();
-					}))
+					}));
+
+			new Setting(sectionEl)
+				.setName("最近上传")
+				.setDesc(formatStatus({ status: repository.lastUploadStatus, at: repository.lastUploadedAt, message: repository.lastUploadMessage }, "尚未上传"))
+				.addButton((button) => {
+					button
+						.setButtonText("上传本地改动")
+						.setDisabled(Boolean(repository.pendingConflict))
+						.onClick(async () => {
+							await this.plugin.uploadRepository(repository.id, true);
+							this.display();
+						});
+				})
 				.addButton((button) => button
 					.setButtonText("删除")
 					.setWarning()
@@ -164,6 +207,14 @@ export class MultiGitSettingTab extends PluginSettingTab {
 					}));
 		}
 	}
+}
+
+export function normalizeSettings(data?: Partial<MultiGitSettings> | null): MultiGitSettings {
+	const repositories = Array.isArray(data?.repositories)
+		? data.repositories.map((repository) => normalizeRepositoryConfig(repository))
+		: [];
+
+	return { ...DEFAULT_SETTINGS, ...(data ?? {}), repositories };
 }
 
 function createRepositoryConfig(): GitRepositoryConfig {
@@ -177,6 +228,39 @@ function createRepositoryConfig(): GitRepositoryConfig {
 		autoSync: false,
 		intervalMinutes: DEFAULT_INTERVAL_MINUTES,
 		lastSyncStatus: "never",
+		lastUploadStatus: "never",
+	};
+}
+
+function normalizeRepositoryConfig(repository: Partial<GitRepositoryConfig>): GitRepositoryConfig {
+	return {
+		id: repository.id || createId(),
+		name: repository.name || "",
+		remoteUrl: normalizeRemoteUrl(repository.remoteUrl || ""),
+		localPath: repository.localPath || "",
+		branch: repository.branch || "",
+		enabled: repository.enabled ?? true,
+		autoSync: repository.autoSync ?? false,
+		intervalMinutes: normalizeInterval(String(repository.intervalMinutes ?? DEFAULT_INTERVAL_MINUTES)),
+		lastSyncedAt: repository.lastSyncedAt,
+		lastSyncStatus: repository.lastSyncStatus ?? "never",
+		lastSyncMessage: repository.lastSyncMessage,
+		lastUploadedAt: repository.lastUploadedAt,
+		lastUploadStatus: repository.lastUploadStatus ?? "never",
+		lastUploadMessage: repository.lastUploadMessage,
+		pendingConflict: normalizeConflictState(repository.pendingConflict),
+	};
+}
+
+function normalizeConflictState(value?: Partial<GitConflictState>): GitConflictState | undefined {
+	if (!value || !value.branch || !value.startedAt || !Array.isArray(value.files)) {
+		return undefined;
+	}
+
+	return {
+		branch: value.branch,
+		files: value.files.filter((file) => typeof file === "string" && file.length > 0),
+		startedAt: value.startedAt,
 	};
 }
 
@@ -197,13 +281,23 @@ function normalizeInterval(value: string): number {
 	return Math.max(1, parsed);
 }
 
-function formatStatus(repository: GitRepositoryConfig): string {
-	if (repository.lastSyncStatus === "never") {
-		return "尚未同步";
+function formatStatus(record: { status: SyncStatus; at?: string; message?: string }, neverText: string): string {
+	if (record.status === "never") {
+		return neverText;
 	}
 
-	const time = repository.lastSyncedAt ? new Date(repository.lastSyncedAt).toLocaleString() : "未知时间";
-	const message = repository.lastSyncMessage ? `：${repository.lastSyncMessage}` : "";
-	const status = repository.lastSyncStatus === "success" ? "成功" : "失败";
-	return `${time} ${status}${message}`;
+	const time = record.at ? new Date(record.at).toLocaleString() : "未知时间";
+	const statusText = record.status === "success" ? "成功" : "失败";
+	const detail = record.message ? `：${record.message}` : "";
+	return `${time} ${statusText}${detail}`;
+}
+
+function formatConflictStatus(repository: GitRepositoryConfig): string {
+	const conflict = repository.pendingConflict;
+	if (!conflict) {
+		return "";
+	}
+
+	const time = new Date(conflict.startedAt).toLocaleString();
+	return `${time} 发现 ${conflict.files.length} 个冲突文件。处理完成后选择“继续上传”。`;
 }

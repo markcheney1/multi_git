@@ -1,6 +1,7 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, TFile, normalizePath } from "obsidian";
 import { GitSyncService } from "./sync";
-import { DEFAULT_SETTINGS, MultiGitSettingTab, MultiGitSettings } from "./settings";
+import { MultiGitSettingTab, MultiGitSettings, normalizeSettings } from "./settings";
+import { ConflictResolutionModal } from "./ui/conflict-modal";
 
 export default class MultiGitPlugin extends Plugin {
 	settings: MultiGitSettings;
@@ -15,8 +16,12 @@ export default class MultiGitPlugin extends Plugin {
 
 		this.gitSyncService = new GitSyncService(this.app);
 
-		this.addRibbonIcon("refresh-cw", "同步 Git 仓库", () => {
+		this.addRibbonIcon("refresh-cw", "拉取 Git 仓库最新内容", () => {
 			void this.syncAllRepositories();
+		});
+
+		this.addRibbonIcon("upload-cloud", "上传 Git 仓库改动", () => {
+			void this.uploadAllRepositories();
 		});
 
 		this.statusBarItemEl = this.addStatusBarItem();
@@ -24,9 +29,17 @@ export default class MultiGitPlugin extends Plugin {
 
 		this.addCommand({
 			id: "sync-all-repositories",
-			name: "同步所有 Git 仓库",
+			name: "拉取所有 Git 仓库最新内容",
 			callback: () => {
 				void this.syncAllRepositories();
+			},
+		});
+
+		this.addCommand({
+			id: "upload-all-repositories",
+			name: "上传所有 Git 仓库改动",
+			callback: () => {
+				void this.uploadAllRepositories();
 			},
 		});
 
@@ -36,7 +49,7 @@ export default class MultiGitPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MultiGitSettings>);
+		this.settings = normalizeSettings(await this.loadData() as Partial<MultiGitSettings> | null);
 	}
 
 	async saveSettings() {
@@ -59,7 +72,7 @@ export default class MultiGitPlugin extends Plugin {
 			return;
 		}
 
-		this.updateStatusBar("同步中...");
+		this.updateStatusBar("拉取中...");
 
 		let successCount = 0;
 		let failedCount = 0;
@@ -76,7 +89,7 @@ export default class MultiGitPlugin extends Plugin {
 		this.updateStatusBar();
 
 		if (showNotice) {
-			new Notice(`Git 同步完成：${successCount} 成功，${failedCount} 失败`);
+			new Notice(`Git 拉取完成：${successCount} 成功，${failedCount} 失败`);
 		}
 	}
 
@@ -99,13 +112,21 @@ export default class MultiGitPlugin extends Plugin {
 
 		if (this.syncingRepositoryIds.has(repository.id)) {
 			if (showNotice) {
-				new Notice(`${repository.name || repository.localPath} 正在同步`);
+				new Notice(`${repository.name || repository.localPath} 正在处理`);
+			}
+			return false;
+		}
+
+		if (repository.pendingConflict) {
+			if (showNotice) {
+				new Notice(`${repository.name || repository.localPath} 有未完成的上传冲突，请处理后继续上传`);
+				await this.showConflictResolution(repository.id);
 			}
 			return false;
 		}
 
 		this.syncingRepositoryIds.add(repository.id);
-		this.updateStatusBar("同步中...");
+		this.updateStatusBar("拉取中...");
 
 		try {
 			const result = await this.gitSyncService.sync(repository);
@@ -126,13 +147,257 @@ export default class MultiGitPlugin extends Plugin {
 			await this.saveSettings();
 
 			if (showNotice) {
-				new Notice(`${repository.name || repository.localPath} 同步失败：${message}`);
+				new Notice(`${repository.name || repository.localPath} 拉取失败：${message}`);
 			}
 			return false;
 		} finally {
 			this.syncingRepositoryIds.delete(repository.id);
 			this.updateStatusBar();
 		}
+	}
+
+	async uploadAllRepositories(showNotice = true) {
+		const repositories = this.settings.repositories.filter((repository) => repository.enabled);
+
+		if (repositories.length === 0) {
+			if (showNotice) {
+				new Notice("没有已启用的 Git 仓库");
+			}
+			return;
+		}
+
+		this.updateStatusBar("上传中...");
+
+		let successCount = 0;
+		let failedCount = 0;
+
+		for (const repository of repositories) {
+			const success = await this.uploadRepository(repository.id, false);
+			if (success) {
+				successCount += 1;
+			} else {
+				failedCount += 1;
+			}
+		}
+
+		this.updateStatusBar();
+
+		if (showNotice) {
+			new Notice(`Git 上传完成：${successCount} 成功，${failedCount} 失败或暂停`);
+		}
+	}
+
+	async uploadRepository(repositoryId: string, showNotice = true): Promise<boolean> {
+		const repository = this.settings.repositories.find((item) => item.id === repositoryId);
+
+		if (!repository) {
+			if (showNotice) {
+				new Notice("未找到 Git 仓库配置");
+			}
+			return false;
+		}
+
+		const repositoryName = repository.name || repository.localPath;
+
+		if (!repository.enabled) {
+			if (showNotice) {
+				new Notice(`${repositoryName} 已停用`);
+			}
+			return false;
+		}
+
+		if (this.syncingRepositoryIds.has(repository.id)) {
+			if (showNotice) {
+				new Notice(`${repositoryName} 正在处理`);
+			}
+			return false;
+		}
+
+		if (repository.pendingConflict) {
+			if (showNotice) {
+				new Notice(`${repositoryName} 有未完成的上传冲突，请处理后继续上传`);
+				await this.showConflictResolution(repository.id);
+			}
+			return false;
+		}
+
+		this.syncingRepositoryIds.add(repository.id);
+		this.updateStatusBar("上传中...");
+
+		try {
+			const result = await this.gitSyncService.upload(repository);
+			const now = new Date().toISOString();
+			repository.lastUploadedAt = now;
+			repository.lastUploadMessage = result.message;
+
+			if (result.conflict) {
+				repository.pendingConflict = {
+					branch: result.conflict.branch,
+					files: result.conflict.files,
+					startedAt: now,
+				};
+				repository.lastUploadStatus = "error";
+				await this.saveSettings();
+
+				if (showNotice) {
+					new Notice(`${repositoryName} 上传暂停：发现 ${result.conflict.files.length} 个冲突文件`);
+					this.openConflictModal(repository.id, result.conflict.details);
+				}
+
+				return false;
+			}
+
+			delete repository.pendingConflict;
+			repository.lastUploadStatus = "success";
+			await this.saveSettings();
+
+			if (showNotice) {
+				new Notice(`${repositoryName}：${result.message}`);
+			}
+			return true;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			repository.lastUploadedAt = new Date().toISOString();
+			repository.lastUploadStatus = "error";
+			repository.lastUploadMessage = message;
+			await this.saveSettings();
+
+			if (showNotice) {
+				new Notice(`${repositoryName} 上传失败：${message}`);
+			}
+			return false;
+		} finally {
+			this.syncingRepositoryIds.delete(repository.id);
+			this.updateStatusBar();
+		}
+	}
+
+	async continueUploadRepository(repositoryId: string, showNotice = true): Promise<boolean> {
+		const repository = this.settings.repositories.find((item) => item.id === repositoryId);
+
+		if (!repository) {
+			if (showNotice) {
+				new Notice("未找到 Git 仓库配置");
+			}
+			return false;
+		}
+
+		const repositoryName = repository.name || repository.localPath;
+
+		if (!repository.pendingConflict) {
+			if (showNotice) {
+				new Notice(`${repositoryName} 没有未完成的上传冲突`);
+			}
+			return false;
+		}
+
+		if (this.syncingRepositoryIds.has(repository.id)) {
+			if (showNotice) {
+				new Notice(`${repositoryName} 正在处理`);
+			}
+			return false;
+		}
+
+		this.syncingRepositoryIds.add(repository.id);
+		this.updateStatusBar("继续上传...");
+
+		try {
+			const previousConflict = repository.pendingConflict;
+			const result = await this.gitSyncService.continueUpload(repository, previousConflict);
+			const now = new Date().toISOString();
+			repository.lastUploadedAt = now;
+			repository.lastUploadMessage = result.message;
+
+			if (result.conflict) {
+				repository.pendingConflict = {
+					branch: result.conflict.branch,
+					files: result.conflict.files,
+					startedAt: previousConflict.startedAt,
+				};
+				repository.lastUploadStatus = "error";
+				await this.saveSettings();
+
+				if (showNotice) {
+					new Notice(`${repositoryName} 仍有冲突需要处理`);
+					this.openConflictModal(repository.id, result.conflict.details);
+				}
+				return false;
+			}
+
+			delete repository.pendingConflict;
+			repository.lastUploadStatus = "success";
+			await this.saveSettings();
+
+			if (showNotice) {
+				new Notice(`${repositoryName}：${result.message}`);
+			}
+			return true;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			repository.lastUploadedAt = new Date().toISOString();
+			repository.lastUploadStatus = "error";
+			repository.lastUploadMessage = message;
+			await this.saveSettings();
+
+			if (showNotice) {
+				new Notice(`${repositoryName} 继续上传失败：${message}`);
+			}
+			return false;
+		} finally {
+			this.syncingRepositoryIds.delete(repository.id);
+			this.updateStatusBar();
+		}
+	}
+
+	async showConflictResolution(repositoryId: string): Promise<void> {
+		const repository = this.settings.repositories.find((item) => item.id === repositoryId);
+
+		if (!repository) {
+			new Notice("未找到 Git 仓库配置");
+			return;
+		}
+
+		if (!repository.pendingConflict) {
+			new Notice(`${repository.name || repository.localPath} 没有未完成的上传冲突`);
+			return;
+		}
+
+		try {
+			const details = await this.gitSyncService.getConflictDetails(repository, repository.pendingConflict.files);
+			this.openConflictModal(repository.id, details);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(`无法读取冲突文件：${message}`);
+		}
+	}
+
+	private openConflictModal(repositoryId: string, conflictFiles: Array<{ path: string; conflictLines: number[] }>) {
+		const repository = this.settings.repositories.find((item) => item.id === repositoryId);
+		if (!repository) {
+			return;
+		}
+
+		new ConflictResolutionModal(this.app, {
+			repositoryName: repository.name || repository.localPath,
+			conflictFiles,
+			onOpenFile: async (filePath) => this.openRepositoryFile(repository.localPath, filePath),
+			onContinue: async () => {
+				await this.continueUploadRepository(repository.id, true);
+			},
+		}).open();
+	}
+
+	private async openRepositoryFile(repositoryLocalPath: string, repositoryRelativeFilePath: string) {
+		const repositoryPath = normalizePath(repositoryLocalPath.trim()).replace(/^\/+/, "");
+		const filePath = normalizePath(`${repositoryPath}/${repositoryRelativeFilePath}`);
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+
+		if (file instanceof TFile) {
+			await this.app.workspace.getLeaf(false).openFile(file);
+			return;
+		}
+
+		new Notice(`未找到冲突文件：${filePath}`);
 	}
 
 	private scheduleAutoSync() {
