@@ -126,12 +126,12 @@ npm run build
 
 GitHub Release 的 tag 必须和 `manifest.json` 中的 `version` 完全一致，不要加 `v` 前缀。
 
-发布 `1.0.0`：
+发布 `1.1.0`：
 
 ```bash
-git tag 1.0.0
+git tag 1.1.0
 git push origin master
-git push origin 1.0.0
+git push origin 1.1.0
 ```
 
 推送 tag 后，GitHub Actions 会自动构建并创建 release，上传以下 BRAT 需要的资产：
