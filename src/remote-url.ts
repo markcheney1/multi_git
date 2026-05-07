@@ -25,6 +25,40 @@ export function isAllowedRemoteUrl(value: string): boolean {
 	return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+:[^\s]+$/.test(value);
 }
 
+export function isHttpsRemoteUrl(value: string): boolean {
+	return getRemoteUrlScheme(value) === "https";
+}
+
+export function buildAuthenticatedRemoteUrl(remoteUrl: string, token: string): string {
+	if (!token || !isHttpsRemoteUrl(remoteUrl)) {
+		return remoteUrl;
+	}
+
+	try {
+		const url = new URL(remoteUrl);
+		url.username = "oauth2";
+		url.password = token;
+		return url.toString();
+	} catch {
+		return remoteUrl;
+	}
+}
+
+export function stripRemoteUrlCredentials(remoteUrl: string): string {
+	if (!isHttpsRemoteUrl(remoteUrl)) {
+		return remoteUrl;
+	}
+
+	try {
+		const url = new URL(remoteUrl);
+		url.username = "";
+		url.password = "";
+		return url.toString();
+	} catch {
+		return remoteUrl;
+	}
+}
+
 export function describeRemoteUrl(value: string): string {
 	const scheme = getRemoteUrlScheme(value);
 	if (scheme === "https") {

@@ -17,6 +17,8 @@ export interface GitRepositoryConfig {
 	localPath: string;
 	branch: string;
 	enabled: boolean;
+	useOAuth2: boolean;
+	oauth2Token: string;
 	autoSync: boolean;
 	intervalMinutes: number;
 	lastSyncedAt?: string;
@@ -112,6 +114,32 @@ export class MultiGitSettingTab extends PluginSettingTab {
 						repository.remoteUrl = normalizeRemoteUrl(value);
 						await this.plugin.saveSettings();
 					}));
+
+			new Setting(sectionEl)
+				.setName("访问令牌认证")
+				.setDesc("启用后会把访问令牌用于 HTTPS Git 认证。")
+				.addToggle((toggle) => toggle
+					.setValue(repository.useOAuth2)
+					.onChange(async (value) => {
+						repository.useOAuth2 = value;
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+
+			if (repository.useOAuth2) {
+				new Setting(sectionEl)
+					.setName("访问令牌")
+					.setDesc("仅在本机保存，请确认仓库支持以 oauth2 用户名 + 令牌作为密码访问。")
+					.addText((text) => {
+						text.inputEl.type = "password";
+						text.setPlaceholder("访问令牌")
+							.setValue(repository.oauth2Token)
+							.onChange(async (value) => {
+								repository.oauth2Token = value.trim();
+								await this.plugin.saveSettings();
+							});
+					});
+			}
 
 			new Setting(sectionEl)
 				.setName("Vault 目录")
@@ -227,6 +255,8 @@ function createRepositoryConfig(): GitRepositoryConfig {
 		enabled: true,
 		autoSync: false,
 		intervalMinutes: DEFAULT_INTERVAL_MINUTES,
+		useOAuth2: false,
+		oauth2Token: "",
 		lastSyncStatus: "never",
 		lastUploadStatus: "never",
 	};
@@ -240,6 +270,8 @@ function normalizeRepositoryConfig(repository: Partial<GitRepositoryConfig>): Gi
 		localPath: repository.localPath || "",
 		branch: repository.branch || "",
 		enabled: repository.enabled ?? true,
+		useOAuth2: repository.useOAuth2 ?? false,
+		oauth2Token: typeof repository.oauth2Token === "string" ? repository.oauth2Token : "",
 		autoSync: repository.autoSync ?? false,
 		intervalMinutes: normalizeInterval(String(repository.intervalMinutes ?? DEFAULT_INTERVAL_MINUTES)),
 		lastSyncedAt: repository.lastSyncedAt,

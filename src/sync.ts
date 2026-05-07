@@ -4,7 +4,14 @@ import * as path from "path";
 import { promisify } from "util";
 import { App, FileSystemAdapter, normalizePath } from "obsidian";
 import type { GitConflictState, GitRepositoryConfig } from "./settings";
-import { describeRemoteUrl, isAllowedRemoteUrl, normalizeRemoteUrl } from "./remote-url";
+import {
+	buildAuthenticatedRemoteUrl,
+	describeRemoteUrl,
+	isAllowedRemoteUrl,
+	isHttpsRemoteUrl,
+	normalizeRemoteUrl,
+	stripRemoteUrlCredentials,
+} from "./remote-url";
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -81,7 +88,7 @@ export class GitSyncService {
 			return { message: "已拉取最新内容，没有需要上传的本地改动" };
 		}
 
-		await this.runGit(["push", "origin", branch], ready.repositoryPath);
+		await this.runGitWithAuthenticatedOrigin(repository, ["push", "origin", branch], ready.repositoryPath);
 		return { message: "已先同步远端更新，并上传本地改动" };
 	}
 
@@ -125,7 +132,7 @@ export class GitSyncService {
 			return conflict;
 		}
 
-		await this.runGit(["push", "origin", branch], ready.repositoryPath);
+		await this.runGitWithAuthenticatedOrigin(repository, ["push", "origin", branch], ready.repositoryPath);
 		return { message: "已提交冲突处理结果，并完成上传" };
 	}
 
@@ -145,6 +152,15 @@ export class GitSyncService {
 
 		if (!isAllowedRemoteUrl(remoteUrl)) {
 			throw new Error(`Git 链接必须是 HTTPS 或 SSH 地址，当前识别为：${describeRemoteUrl(remoteUrl)}`);
+		}
+
+		if (repository.useOAuth2) {
+			if (!isHttpsRemoteUrl(remoteUrl)) {
+				throw new Error("OAuth2 认证仅支持 HTTPS 地址");
+			}
+			if (!repository.oauth2Token.trim()) {
+				throw new Error("启用 OAuth2 认证后必须填写访问令牌");
+			}
 		}
 
 		if (!repository.localPath.trim()) {
@@ -187,7 +203,7 @@ export class GitSyncService {
 			}
 			await this.ensureNoSymlinkPath(location.vaultRoot, path.dirname(location.repositoryPath));
 			await fs.mkdir(path.dirname(location.repositoryPath), { recursive: true });
-			await this.cloneRepository(repository, location.vaultRoot, location.repositoryPath);
+			await this.cloneRepository(repository, location.repositoryPath);
 			return { ...location, cloned: true };
 		}
 
@@ -208,7 +224,7 @@ export class GitSyncService {
 				throw new Error("Vault 目录已存在且不是 Git 仓库");
 			}
 
-			await this.cloneRepository(repository, location.vaultRoot, location.repositoryPath);
+			await this.cloneRepository(repository, location.repositoryPath);
 			return { ...location, cloned: true };
 		}
 
@@ -273,16 +289,59 @@ export class GitSyncService {
 		}
 	}
 
-	private async cloneRepository(repository: GitRepositoryConfig, vaultRoot: string, repositoryPath: string) {
-		const args = ["clone"];
-		const branch = repository.branch.trim();
-
-		if (branch) {
-			args.push("--branch", branch);
+	private getAuthenticatedRemoteUrl(repository: GitRepositoryConfig): string {
+		const remoteUrl = normalizeRemoteUrl(repository.remoteUrl);
+		if (!repository.useOAuth2) {
+			return remoteUrl;
 		}
 
-		args.push(normalizeRemoteUrl(repository.remoteUrl), repositoryPath);
-		await this.runGit(args, vaultRoot);
+		return buildAuthenticatedRemoteUrl(remoteUrl, repository.oauth2Token.trim());
+	}
+
+	private async fetchRemoteBranch(repository: GitRepositoryConfig, repositoryPath: string, branch: string) {
+		await this.runGitWithAuthenticatedOrigin(
+			repository,
+			["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+			repositoryPath,
+		);
+	}
+
+	private async cloneRepository(repository: GitRepositoryConfig, repositoryPath: string) {
+		await fs.mkdir(repositoryPath, { recursive: true });
+		await this.runGit(["init"], repositoryPath);
+
+		const remoteUrl = normalizeRemoteUrl(repository.remoteUrl);
+		await this.runGit(["remote", "add", "origin", remoteUrl], repositoryPath);
+
+		const branch = repository.branch.trim();
+		if (branch) {
+			await this.fetchRemoteBranch(repository, repositoryPath, branch);
+			await this.runGit(["checkout", "-B", branch, `origin/${branch}`], repositoryPath);
+			return;
+		}
+
+		await this.runGitWithAuthenticatedOrigin(repository, ["fetch", "origin"], repositoryPath);
+		await this.runGitWithAuthenticatedOrigin(repository, ["remote", "set-head", "origin", "--auto"], repositoryPath);
+
+		const defaultBranch = await this.getDefaultRemoteBranch(repositoryPath);
+		await this.runGit(["checkout", "-B", defaultBranch, `origin/${defaultBranch}`], repositoryPath);
+	}
+
+	private async getDefaultRemoteBranch(repositoryPath: string): Promise<string> {
+		try {
+			const result = await this.runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repositoryPath);
+			const remoteHead = result.stdout.trim();
+			if (remoteHead.startsWith("origin/")) {
+				const branch = remoteHead.slice("origin/".length);
+				if (isSafeBranchName(branch)) {
+					return branch;
+				}
+			}
+		} catch {
+			// Fall through to the user-facing error below.
+		}
+
+		throw new Error("无法识别远程默认分支，请在设置中填写分支名");
 	}
 
 	private async ensureOriginMatches(repository: GitRepositoryConfig, repositoryPath: string) {
@@ -294,8 +353,13 @@ export class GitSyncService {
 			throw new Error("目标目录已有 Git 仓库，但无法读取 origin");
 		}
 
-		if (currentRemoteUrl !== normalizeRemoteUrl(repository.remoteUrl)) {
+		const expectedRemoteUrl = normalizeRemoteUrl(repository.remoteUrl);
+		if (stripRemoteUrlCredentials(currentRemoteUrl) !== stripRemoteUrlCredentials(expectedRemoteUrl)) {
 			throw new Error("目标目录已有 Git 仓库，且 origin 与配置的 Git 链接不一致");
+		}
+
+		if (currentRemoteUrl !== expectedRemoteUrl) {
+			await this.runGit(["remote", "set-url", "origin", expectedRemoteUrl], repositoryPath);
 		}
 	}
 
@@ -303,11 +367,11 @@ export class GitSyncService {
 		const branch = repository.branch.trim();
 
 		if (!branch) {
-			await this.runGit(["pull", "--ff-only"], repositoryPath);
+			await this.runGitWithAuthenticatedOrigin(repository, ["pull", "--ff-only"], repositoryPath);
 			return;
 		}
 
-		await this.runGit(["fetch", "origin", branch], repositoryPath);
+		await this.fetchRemoteBranch(repository, repositoryPath, branch);
 
 		try {
 			await this.runGit(["checkout", branch], repositoryPath);
@@ -315,14 +379,14 @@ export class GitSyncService {
 			await this.runGit(["checkout", "-b", branch, `origin/${branch}`], repositoryPath);
 		}
 
-		await this.runGit(["pull", "--ff-only", "origin", branch], repositoryPath);
+		await this.runGitWithAuthenticatedOrigin(repository, ["pull", "--ff-only", "origin", branch], repositoryPath);
 	}
 
 	private async prepareUploadBranch(repository: GitRepositoryConfig, repositoryPath: string): Promise<string> {
 		const configured = repository.branch.trim();
 		const branch = configured || await this.getCurrentBranch(repositoryPath);
 
-		await this.runGit(["fetch", "origin", branch], repositoryPath);
+		await this.fetchRemoteBranch(repository, repositoryPath, branch);
 
 		if (configured) {
 			try {
@@ -480,6 +544,14 @@ export class GitSyncService {
 
 	private async isMergeInProgress(repositoryPath: string): Promise<boolean> {
 		return pathExists(path.join(repositoryPath, ".git", "MERGE_HEAD"));
+	}
+
+	private async runGitWithAuthenticatedOrigin(repository: GitRepositoryConfig, args: string[], cwd: string) {
+		if (!repository.useOAuth2) {
+			return this.runGit(args, cwd);
+		}
+
+		return this.runGit(["-c", `remote.origin.url=${this.getAuthenticatedRemoteUrl(repository)}`, ...args], cwd);
 	}
 
 	private async runGit(args: string[], cwd: string) {
