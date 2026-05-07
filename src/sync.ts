@@ -551,7 +551,9 @@ export class GitSyncService {
 			return this.runGit(args, cwd);
 		}
 
-		return this.runGit(["-c", `remote.origin.url=${this.getAuthenticatedRemoteUrl(repository)}`, ...args], cwd);
+		const remoteUrl = normalizeRemoteUrl(repository.remoteUrl);
+		const authenticatedRemoteUrl = this.getAuthenticatedRemoteUrl(repository);
+		return this.runGit(["-c", `url.${authenticatedRemoteUrl}.insteadOf=${remoteUrl}`, ...args], cwd);
 	}
 
 	private async runGit(args: string[], cwd: string) {
