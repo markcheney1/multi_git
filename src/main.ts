@@ -1,4 +1,5 @@
 import { Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { SyncFolderBadgeManager } from "./folder-badges";
 import { GitSyncService } from "./sync";
 import { MultiGitSettingTab, MultiGitSettings, normalizeSettings } from "./settings";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
@@ -7,6 +8,7 @@ export default class MultiGitPlugin extends Plugin {
 	settings: MultiGitSettings;
 
 	private gitSyncService: GitSyncService;
+	private folderBadgeManager: SyncFolderBadgeManager;
 	private syncTimers: number[] = [];
 	private syncingRepositoryIds = new Set<string>();
 	private statusBarItemEl: HTMLElement;
@@ -15,6 +17,8 @@ export default class MultiGitPlugin extends Plugin {
 		await this.loadSettings();
 
 		this.gitSyncService = new GitSyncService(this.app);
+		this.folderBadgeManager = new SyncFolderBadgeManager(this.app, () => this.getSyncFolderPaths());
+		this.folderBadgeManager.start();
 
 		this.addRibbonIcon("refresh-cw", "拉取 Git 仓库最新内容", () => {
 			void this.syncAllRepositories();
@@ -44,6 +48,11 @@ export default class MultiGitPlugin extends Plugin {
 		});
 
 		this.register(() => this.clearAutoSyncTimers());
+		this.register(() => this.folderBadgeManager.stop());
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.folderBadgeManager.refresh()));
+		this.registerEvent(this.app.vault.on("create", () => this.folderBadgeManager.refresh()));
+		this.registerEvent(this.app.vault.on("delete", () => this.folderBadgeManager.refresh()));
+		this.registerEvent(this.app.vault.on("rename", () => this.folderBadgeManager.refresh()));
 		this.addSettingTab(new MultiGitSettingTab(this.app, this));
 		this.scheduleAutoSync();
 	}
@@ -54,6 +63,7 @@ export default class MultiGitPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		this.folderBadgeManager?.refresh();
 	}
 
 	async saveSettingsAndReschedule() {
@@ -423,6 +433,12 @@ export default class MultiGitPlugin extends Plugin {
 		}
 
 		this.syncTimers = [];
+	}
+
+	private getSyncFolderPaths(): string[] {
+		return this.settings.repositories
+			.filter((repository) => repository.enabled)
+			.map((repository) => repository.localPath);
 	}
 
 	private updateStatusBar(text?: string) {

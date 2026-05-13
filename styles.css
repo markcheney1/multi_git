@@ -9,6 +9,26 @@
 	color: var(--text-muted);
 }
 
+.multi-git-sync-folder {
+	position: relative;
+}
+
+.multi-git-sync-folder-badge {
+	align-items: center;
+	background: var(--interactive-accent);
+	border-radius: 6px;
+	color: var(--text-on-accent);
+	display: inline-flex;
+	flex: 0 0 auto;
+	font-size: 10px;
+	font-weight: 600;
+	height: 16px;
+	line-height: 1;
+	margin-left: 6px;
+	padding: 0 5px;
+	pointer-events: none;
+}
+
 .multi-git-conflict-modal p {
 	color: var(--text-muted);
 	margin-top: 0;
