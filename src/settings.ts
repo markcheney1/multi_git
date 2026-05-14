@@ -1,13 +1,15 @@
-import { App, PluginSettingTab, Setting, normalizePath } from "obsidian";
+import { App, PluginSettingTab, Setting, TFolder, normalizePath } from "obsidian";
 import type MultiGitPlugin from "./main";
 import { normalizeRemoteUrl } from "./remote-url";
 
 export type SyncStatus = "never" | "success" | "error";
+export type GitConflictOperation = "sync" | "upload";
 
 export interface GitConflictState {
 	branch: string;
 	files: string[];
 	startedAt: string;
+	operation: GitConflictOperation;
 }
 
 export interface GitRepositoryConfig {
@@ -32,13 +34,16 @@ export interface GitRepositoryConfig {
 
 export interface MultiGitSettings {
 	repositories: GitRepositoryConfig[];
+	folderBadgeText: string;
 }
 
 export const DEFAULT_SETTINGS: MultiGitSettings = {
 	repositories: [],
+	folderBadgeText: "请勿修改",
 };
 
 const DEFAULT_INTERVAL_MINUTES = 30;
+const DEFAULT_FOLDER_BADGE_TEXT = DEFAULT_SETTINGS.folderBadgeText;
 
 export class MultiGitSettingTab extends PluginSettingTab {
 	plugin: MultiGitPlugin;
@@ -55,6 +60,17 @@ export class MultiGitSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Multi Git 同步")
 			.setHeading();
+
+		new Setting(containerEl)
+			.setName("同步目录角标")
+			.setDesc("显示在同步目录旁边的短文字。留空时使用“请勿修改”。")
+			.addText((text) => text
+				.setPlaceholder(DEFAULT_FOLDER_BADGE_TEXT)
+				.setValue(this.plugin.settings.folderBadgeText)
+				.onChange(async (value) => {
+					this.plugin.settings.folderBadgeText = normalizeFolderBadgeText(value);
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName("添加仓库")
@@ -79,7 +95,8 @@ export class MultiGitSettingTab extends PluginSettingTab {
 		for (const repository of this.plugin.settings.repositories) {
 			const sectionEl = containerEl.createDiv({ cls: "multi-git-repository" });
 			new Setting(sectionEl)
-				.setName(repository.name || repository.localPath || "未命名仓库")
+				.setName(getRepositoryFolderDisplayName(this.app, repository))
+				.setDesc(repository.name ? `配置名称：${repository.name}` : "")
 				.setHeading();
 
 			new Setting(sectionEl)
@@ -185,8 +202,9 @@ export class MultiGitSettingTab extends PluginSettingTab {
 					}));
 
 			if (repository.pendingConflict) {
+				const conflictOperationText = getConflictOperationText(repository.pendingConflict.operation);
 				new Setting(sectionEl)
-					.setName("上传暂停")
+					.setName(`${conflictOperationText}暂停`)
 					.setDesc(formatConflictStatus(repository))
 					.addButton((button) => button
 						.setButtonText("查看冲突")
@@ -195,10 +213,10 @@ export class MultiGitSettingTab extends PluginSettingTab {
 							this.display();
 						}))
 					.addButton((button) => button
-						.setButtonText("继续上传")
+						.setButtonText(`继续${conflictOperationText}`)
 						.setCta()
 						.onClick(async () => {
-							await this.plugin.continueUploadRepository(repository.id, true);
+							await this.plugin.continueConflictRepository(repository.id, true);
 							this.display();
 						}));
 			}
@@ -216,6 +234,11 @@ export class MultiGitSettingTab extends PluginSettingTab {
 			new Setting(sectionEl)
 				.setName("最近上传")
 				.setDesc(formatStatus({ status: repository.lastUploadStatus, at: repository.lastUploadedAt, message: repository.lastUploadMessage }, "尚未上传"))
+				.addButton((button) => button
+					.setButtonText("查看 diff")
+					.onClick(async () => {
+						await this.plugin.showRepositoryDiff(repository.id);
+					}))
 				.addButton((button) => {
 					button
 						.setButtonText("上传本地改动")
@@ -242,7 +265,23 @@ export function normalizeSettings(data?: Partial<MultiGitSettings> | null): Mult
 		? data.repositories.map((repository) => normalizeRepositoryConfig(repository))
 		: [];
 
-	return { ...DEFAULT_SETTINGS, ...(data ?? {}), repositories };
+	return {
+		...DEFAULT_SETTINGS,
+		...(data ?? {}),
+		repositories,
+		folderBadgeText: normalizeFolderBadgeText(data?.folderBadgeText),
+	};
+}
+
+export function getRepositoryFolderDisplayName(app: App, repository: Pick<GitRepositoryConfig, "localPath">): string {
+	const normalizedPath = normalizeRepositoryPath(repository.localPath).replace(/\/+$/g, "");
+	const folder = app.vault.getAbstractFileByPath(normalizedPath);
+	if (folder instanceof TFolder) {
+		return folder.name;
+	}
+
+	const parts = normalizedPath.split("/").filter((part) => part.length > 0);
+	return parts.at(-1) || normalizedPath || "未命名目录";
 }
 
 function createRepositoryConfig(): GitRepositoryConfig {
@@ -293,6 +332,7 @@ function normalizeConflictState(value?: Partial<GitConflictState>): GitConflictS
 		branch: value.branch,
 		files: value.files.filter((file) => typeof file === "string" && file.length > 0),
 		startedAt: value.startedAt,
+		operation: value.operation === "sync" ? "sync" : "upload",
 	};
 }
 
@@ -302,6 +342,10 @@ function createId(): string {
 
 function normalizeRepositoryPath(value: string): string {
 	return normalizePath(value.trim()).replace(/^\/+/, "");
+}
+
+function normalizeFolderBadgeText(value?: string): string {
+	return value?.trim() || DEFAULT_FOLDER_BADGE_TEXT;
 }
 
 function normalizeInterval(value: string): number {
@@ -331,5 +375,9 @@ function formatConflictStatus(repository: GitRepositoryConfig): string {
 	}
 
 	const time = new Date(conflict.startedAt).toLocaleString();
-	return `${time} 发现 ${conflict.files.length} 个冲突文件。处理完成后选择“继续上传”。`;
+	return `${time} 发现 ${conflict.files.length} 个冲突文件。处理完成后选择“继续${getConflictOperationText(conflict.operation)}”。`;
+}
+
+function getConflictOperationText(operation: GitConflictOperation): string {
+	return operation === "sync" ? "拉取" : "上传";
 }

@@ -29,6 +29,148 @@
 	pointer-events: none;
 }
 
+.multi-git-upload-modal p {
+	color: var(--text-muted);
+	margin-top: 0;
+}
+
+.multi-git-upload-list {
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 12px;
+}
+
+.multi-git-change-preview-modal-container {
+	max-height: 88vh;
+	max-width: min(1100px, 92vw);
+	width: 92vw;
+}
+
+.multi-git-change-preview-modal p {
+	color: var(--text-muted);
+	margin-top: 0;
+}
+
+.multi-git-change-preview-list {
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 12px;
+}
+
+.multi-git-change-preview-repository {
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 12px 0;
+}
+
+.multi-git-change-preview-repository h3 {
+	font-size: var(--font-ui-medium);
+	margin: 0 0 10px;
+	overflow-wrap: anywhere;
+}
+
+.multi-git-change-preview-group-title {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	margin: 12px 0 6px;
+}
+
+.multi-git-change-preview-files {
+	display: grid;
+	gap: 8px;
+}
+
+.multi-git-change-preview-file {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 8px;
+}
+
+.multi-git-change-preview-file-header {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+	min-width: 0;
+}
+
+.multi-git-change-preview-symbol {
+	border-radius: 6px;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1;
+	min-width: 22px;
+	padding: 5px 6px;
+	text-align: center;
+}
+
+.multi-git-change-preview-added {
+	background: var(--background-modifier-success);
+	color: var(--text-normal);
+}
+
+.multi-git-change-preview-modified,
+.multi-git-change-preview-renamed {
+	background: var(--background-modifier-border-hover);
+	color: var(--text-normal);
+}
+
+.multi-git-change-preview-deleted,
+.multi-git-change-preview-conflict {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+}
+
+.multi-git-change-preview-path {
+	background: transparent;
+	border: 0;
+	color: var(--text-accent);
+	cursor: pointer;
+	flex: 1 1 auto;
+	font: inherit;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	padding: 0;
+	text-align: left;
+}
+
+.multi-git-change-preview-old-path {
+	color: var(--text-muted);
+	flex: 1 1 auto;
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}
+
+.multi-git-change-preview-actions {
+	flex: 0 0 auto;
+}
+
+.multi-git-change-preview-diff {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	font-size: var(--font-ui-smaller);
+	margin: 8px 0 0;
+	max-height: 56vh;
+	overflow: auto;
+	padding: 8px;
+	white-space: pre;
+}
+
+.multi-git-change-preview-diff.is-hidden {
+	display: none;
+}
+
+.multi-git-change-preview-version-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 8px;
+}
+
+.multi-git-change-preview-version-actions.is-hidden {
+	display: none;
+}
+
 .multi-git-conflict-modal p {
 	color: var(--text-muted);
 	margin-top: 0;
@@ -37,4 +179,106 @@
 .multi-git-conflict-list {
 	border-top: 1px solid var(--background-modifier-border);
 	margin-top: 12px;
+}
+
+.multi-git-conflict-file {
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding: 12px 0;
+}
+
+.multi-git-conflict-file-header {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+	margin-bottom: 8px;
+}
+
+.multi-git-conflict-file-header h3 {
+	font-size: var(--font-ui-medium);
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.multi-git-conflict-status-error,
+.multi-git-conflict-status-done {
+	border-radius: 6px;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1;
+	padding: 4px 6px;
+}
+
+.multi-git-conflict-status-error {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+}
+
+.multi-git-conflict-status-done {
+	background: var(--background-modifier-success);
+	color: var(--text-normal);
+}
+
+.multi-git-conflict-file-note {
+	color: var(--text-muted);
+	margin: 8px 0;
+}
+
+.multi-git-conflict-block {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	margin: 8px 0;
+	padding: 10px;
+}
+
+.multi-git-conflict-block-title,
+.multi-git-conflict-preview-title {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	margin-bottom: 6px;
+}
+
+.multi-git-conflict-preview {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.multi-git-conflict-preview-pane {
+	min-width: 0;
+}
+
+.multi-git-conflict-preview-pane pre {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	font-size: var(--font-ui-smaller);
+	margin: 0;
+	max-height: 180px;
+	overflow: auto;
+	padding: 8px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+@media (max-width: 640px) {
+	.multi-git-change-preview-file-header {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+
+	.multi-git-change-preview-actions {
+		width: 100%;
+	}
+
+	.multi-git-change-preview-version-actions {
+		flex-direction: column;
+	}
+
+	.multi-git-conflict-preview {
+		grid-template-columns: 1fr;
+	}
 }

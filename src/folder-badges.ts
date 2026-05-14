@@ -3,6 +3,7 @@ import { App, normalizePath } from "obsidian";
 const FOLDER_TITLE_SELECTOR = ".nav-folder-title[data-path]";
 const SYNC_FOLDER_CLASS = "multi-git-sync-folder";
 const SYNC_BADGE_CLASS = "multi-git-sync-folder-badge";
+const DEFAULT_BADGE_TEXT = "请勿修改";
 
 export class SyncFolderBadgeManager {
 	private observer?: MutationObserver;
@@ -13,6 +14,7 @@ export class SyncFolderBadgeManager {
 	constructor(
 		private readonly app: App,
 		private readonly getSyncFolderPaths: () => string[],
+		private readonly getBadgeText: () => string = () => DEFAULT_BADGE_TEXT,
 	) {
 	}
 
@@ -109,19 +111,34 @@ export class SyncFolderBadgeManager {
 	}
 
 	private addBadge(folderTitleEl: HTMLElement) {
+		const badgeText = normalizeBadgeText(this.getBadgeText());
 		folderTitleEl.classList.add(SYNC_FOLDER_CLASS);
 		folderTitleEl.setAttribute("data-multi-git-sync-folder", "true");
 
-		if (findBadgeEl(folderTitleEl)) {
+		const existingBadgeEl = findBadgeEl(folderTitleEl);
+		if (existingBadgeEl) {
+			this.updateBadge(existingBadgeEl, badgeText);
 			return;
 		}
 
 		const badgeEl = document.createElement("span");
 		badgeEl.className = SYNC_BADGE_CLASS;
-		badgeEl.textContent = "同步";
-		badgeEl.setAttribute("aria-label", "同步目录");
-		badgeEl.setAttribute("title", "同步目录");
+		this.updateBadge(badgeEl, badgeText);
 		folderTitleEl.appendChild(badgeEl);
+	}
+
+	private updateBadge(badgeEl: HTMLElement, badgeText: string) {
+		if (badgeEl.textContent !== badgeText) {
+			badgeEl.textContent = badgeText;
+		}
+
+		if (badgeEl.getAttribute("aria-label") !== badgeText) {
+			badgeEl.setAttribute("aria-label", badgeText);
+		}
+
+		if (badgeEl.getAttribute("title") !== badgeText) {
+			badgeEl.setAttribute("title", badgeText);
+		}
 	}
 
 	private removeBadge(folderTitleEl: HTMLElement) {
@@ -142,6 +159,10 @@ export class SyncFolderBadgeManager {
 			badgeEl.remove();
 		}
 	}
+}
+
+function normalizeBadgeText(value: string): string {
+	return value.trim() || DEFAULT_BADGE_TEXT;
 }
 
 function normalizeFolderPath(path: string): string | null {
