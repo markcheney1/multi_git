@@ -1,4 +1,5 @@
-import { App, normalizePath } from "obsidian";
+import { App } from "obsidian";
+import { normalizeFolderPath } from "./paths";
 
 const FOLDER_TITLE_SELECTOR = ".nav-folder-title[data-path]";
 const SYNC_FOLDER_CLASS = "multi-git-sync-folder";
@@ -163,16 +164,6 @@ export class SyncFolderBadgeManager {
 
 function normalizeBadgeText(value: string): string {
 	return value.trim() || DEFAULT_BADGE_TEXT;
-}
-
-function normalizeFolderPath(path: string): string | null {
-	const normalizedPath = normalizePath(path.trim()).replace(/^\/+|\/+$/g, "");
-
-	if (!normalizedPath || normalizedPath === "." || normalizedPath.split("/").includes("..")) {
-		return null;
-	}
-
-	return normalizedPath;
 }
 
 function findBadgeEl(folderTitleEl: HTMLElement): HTMLElement | null {

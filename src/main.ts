@@ -1,5 +1,6 @@
-import { Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, normalizePath, type WorkspaceLeaf } from "obsidian";
 import { SyncFolderBadgeManager } from "./folder-badges";
+import { normalizeFolderPath } from "./paths";
 import { GitSyncService, type GitConflictFile, type GitConflictResolution } from "./sync";
 import {
 	GitConflictOperation,
@@ -19,6 +20,7 @@ export default class MultiGitPlugin extends Plugin {
 	private folderBadgeManager: SyncFolderBadgeManager;
 	private syncTimers: number[] = [];
 	private syncingRepositoryIds = new Set<string>();
+	private readonly pluginManagedSyncedLeaves = new WeakSet<WorkspaceLeaf>();
 	private statusBarItemEl: HTMLElement;
 
 	async onload() {
@@ -65,6 +67,8 @@ export default class MultiGitPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("create", () => this.folderBadgeManager.refresh()));
 		this.registerEvent(this.app.vault.on("delete", () => this.folderBadgeManager.refresh()));
 		this.registerEvent(this.app.vault.on("rename", () => this.folderBadgeManager.refresh()));
+		this.registerEvent(this.app.workspace.on("file-open", (file) => this.updateOpenedFileMarkdownMode(file)));
+		this.app.workspace.onLayoutReady(() => this.applyModeToExistingSyncedViews());
 		this.addSettingTab(new MultiGitSettingTab(this.app, this));
 		this.scheduleAutoSync();
 	}
@@ -751,6 +755,72 @@ export default class MultiGitPlugin extends Plugin {
 		return this.settings.repositories
 			.filter((repository) => repository.enabled)
 			.map((repository) => repository.localPath);
+	}
+
+	private updateOpenedFileMarkdownMode(file: TFile | null) {
+		if (!file || file.extension !== "md") {
+			return;
+		}
+
+		const isSyncedFile = this.isFileInSyncFolder(file.path);
+		window.requestAnimationFrame(() => {
+			this.applyMarkdownViewMode(file.path, isSyncedFile);
+		});
+	}
+
+	private applyMarkdownViewMode(filePath: string, isSyncedFile: boolean) {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view || view.file?.path !== filePath) {
+			return;
+		}
+
+		const leaf = view.leaf;
+
+		if (isSyncedFile) {
+			this.pluginManagedSyncedLeaves.add(leaf);
+			this.setLeafMarkdownMode(leaf, "preview");
+			return;
+		}
+
+		if (this.pluginManagedSyncedLeaves.has(leaf)) {
+			this.pluginManagedSyncedLeaves.delete(leaf);
+			this.setLeafMarkdownMode(leaf, "source");
+		}
+	}
+
+	private applyModeToExistingSyncedViews() {
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			const view = leaf.view;
+			if (!(view instanceof MarkdownView) || !view.file) {
+				continue;
+			}
+			if (this.isFileInSyncFolder(view.file.path)) {
+				this.pluginManagedSyncedLeaves.add(leaf);
+				this.setLeafMarkdownMode(leaf, "preview");
+			}
+		}
+	}
+
+	private setLeafMarkdownMode(leaf: WorkspaceLeaf, mode: "preview" | "source") {
+		const view = leaf.view;
+		if (view instanceof MarkdownView && view.getMode() === mode) {
+			return;
+		}
+
+		const viewState = leaf.getViewState();
+		void leaf.setViewState({
+			...viewState,
+			state: { ...(viewState.state ?? {}), mode },
+		});
+	}
+
+	private isFileInSyncFolder(filePath: string): boolean {
+		const normalizedFilePath = normalizePath(filePath);
+
+		return this.getSyncFolderPaths().some((syncFolderPath) => {
+			const normalizedFolderPath = normalizeFolderPath(syncFolderPath);
+			return Boolean(normalizedFolderPath) && normalizedFilePath.startsWith(`${normalizedFolderPath}/`);
+		});
 	}
 
 	private updateStatusBar(text?: string) {
